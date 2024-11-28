@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Stratego</title>
+
+    <style>
+        table, td {
+            border: 1px solid black;
+            border-collapse: collapse;
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: row;
+        }
+
+        #board-div {
+            width: 1030px;
+        }
+
+        #dropdown {
+            width: 130px;
+        }
+
+        #dropdown:hover {
+            cursor: pointer;
+        }
+
+        #submit-button {
+            width: 60px;
+            margin-right: 10px;
+        }
+
+        #delete-button {
+            width: 60px;
+        }
+
+        #proceed-button {
+            width: 2000px;
+            height: 500px;
+            font-size: 300px;
+            color: white;
+            border-radius: 15px;
+            border: 0;
+            background-color: #219400;
+        }
+
+        #proceed-button:hover {
+           background-color: #2bc900;
+        }
+
+        #done-button {
+            margin-top: 10px;
+        }
+
+        button:hover {
+            cursor: pointer;
+        }
+
+        #form-div {
+            margin-left: 50px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #instructions-div {
+            margin-left: 50px;
+            width: 500px;
+        }
+
+        #instructions-title {
+            margin: 0;
+        }
+
+        #buttons-div {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: row;
+        }
+
+        #winText {
+            font-size: 100px;
+            color: #29cac7;
+        }
+
+    </style>
+
+
+</head>
+<body>
+<h1>Stratego</h1>
+<div class="container">
+    <div id="board-div"></div>
+    <div id="form-div">
+        <div id="dropdown-form-div"></div>
+        <div id="buttons-div"></div>
+    </div>
+    <div id="instructions-div">
+        <div id="instructions">
+            <h3 id="instructions-title">Instructions</h3>
+            <ul>
+                <li>First, do the setup for player 1. Place 10 pieces on the board. Select a field and a piece from the dropdown,
+                then hit the submit button. Removal of a piece is possible.</li>
+                <li>Once player 1 is done, hit the done button that appears when all pieces are placed.</li>
+                <li>Now player 2 can do perform the same steps as above.</li>
+                <li>When player 2 hits the done button, a big button "proceed" appears. This button appears when there is a switch in turns.
+                This prevents that the current player can see the pieces of the other player immediately. The idea is that when the proceed button is
+                visible, the players can switch their place for the screen.</li>
+                <li>Now, the players can start playing. The current player can see his pieces, the positions of the pieces of the other player are shown in
+                the color red or blue.</li>
+                <li>Now perform Stratego according to the official rules. All the game logic is implemented in the game, a player automatically notes if he can
+                do a move or not.</li>
+                <li><b>IMPORTANT! When a player hits the move button, the physic board starts making the move. While the physic board is doing things, the players should
+                not do ANYTHING in the webapp!</b></li>
+                <li>When a players wins according to the official Stratego rules, this is automatically shown to the players.</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+</body>
+
+<script>
+    // Define the players as integers
+    const PLAYER_1 = "1"
+    const PLAYER_2 = "2"
+
+    let playersHavePlaced = 0 //when 2, the player can start playing (they are both done places pieces), when restarting this value should be o
+    let pieceSelected = {} //selected piece to move
+    let moveToCell = {} //selected cell to move piece to
+    let phase = "setup" // the playing phase at the beginning is "setup"
+
+    // Define the starting player as PLAYER_1
+    let currentPlayer = PLAYER_1
+
+    // Create the initial board
+    let board = createBoard()
+
+    // The lakes in the board, those fields cannot be selected
+    const UNSELECTABLE_FIELDS = [{x: 3, y: 2}, {x: 4, y: 2}, {x: 3, y: 5}, {x: 4, y: 5}]
+
+    // Define all the pieces by a name, rank, amount and the amount of placed on the board
+    let pieces = [{name: "Flag", rank: 0, amount: 1, placed: 0}, {name: "Spy", rank: 1, amount: 1, placed: 0}, {name: "Explorer", rank: 2, amount: 2, placed: 0},
+        {name: "Miner", rank: 3, amount: 2, placed: 0}, {name: "General", rank: 4, amount: 1, placed: 0}, {name: "Marshal", rank: 5, amount: 1, placed: 0},
+        {name: "Bomb", rank: 6, amount: 2, placed: 0}]
+
+    // The current selected cell of the HTMl-table, this is not a JS-object and therefore a string
+    let currentSelectedTableCell = ""
+    // The current selected cell, this is a JS-object
+    let currentSelectedCell = {}
+
+    // Here are two asynchronous functions that send coordinates to the Wemos as HTTP GET requests, where the coordinates are sent as parameters in the URL
+
+    // sendMove sends the coordinates for a move operation to the Wemos
+    async function sendMove(fX, fY, tX, tY) {
+        // Send the coordinates of a move operation to the Wemos and wait for the response
+        // IMPORTANT: adjust the IP address to the  address that the Wemos prints to the serial monitor
+        let response = await self.fetch("http://192.168.1.106/move?" + new URLSearchParams({
+            fromX: fX,
+            fromY: fY,
+            toX: tX,
+            toY: tY
+        }))
+
+        console.log(response.status)
+    }
+    // sendRemove sends the coordinates for a remove operation to the Wemos
+    async function sendRemove(tX, tY) {
+        // Send the coordinates of a remove operation to the Wemos and wait for the response
+        // IMPORTANT: adjust the IP address to the  address that the Wemos prints to the serial monitor
+        return await self.fetch("http://192.168.1.106/remove?" + new URLSearchParams({
+            fromX: tX,
+            fromY: tY
+        }))
+    }
+
+    // sendWin sends to the Wemos the signal that the game is over
+    async function sendWin() {
+        // Send to the Wemos that the game is finished
+        // IMPORTANT: adjust the IP address to the  address that the Wemos prints to the serial monitor
+        let response = await self.fetch("http://192.168.1.106/win")
+
+        console.log(response.status)
+    }
+
+    // Creates and returns a dropdown list with the pieces
+    function createDropDown() {
+        // Create a dropdown element
+        let dropdown = document.createElement("select")
+        // Assign id to the dropdown
+        dropdown.setAttribute("id", "dropdown")
+        // For each of the pieces, if the maximum amount is not reached,
+        // we can add the piece as option in the dropdown menu
+        for (const piece of pieces) {
+            if (piece.placed < piece.amount) {
+                let option = document.createElement("option")
+                option.appendChild(document.createTextNode(piece.name + `(${piece.amount - piece.placed})`))
+                option.setAttribute("value", piece.name)
+                dropdown.appendChild(option)
+            }
+        }
+        return dropdown
+    }
+
+
+    // Creates and returns a new HTMLFormElement
+    function newForm() {
+        // Create new form element
+        let form = document.createElement("form")
+        form.setAttribute("id", "dropdown-form")
+
+        // Add the dropdown to the form
+        let dropdown = createDropDown()
+        form.appendChild(dropdown)
+
+        return form
+    }
+
+    // Return a two-dimensional array containing null objects
+    function createBoard() {
+        return [...Array(8)].map(() => Array(8).fill(null).map(Object))
+    }
+
+    // Creates the table
+    function createTable() {
+        // Create 8 rows
+        for (let i = 0; i < 8; i++) {
+            // In each row, create 8 cells
+            for (let j = 0; j < 8; j++) {
+                let td = document.createElement("TD")
+                // Handle the unselectable fields
+                for (const field of UNSELECTABLE_FIELDS) {
+                    if (field.x === i && field.y === j) {
+                        td.style.background = "#148f77"
+                        td.setAttribute('id', "lake")
+                    }
+                }
+                // If the cell is not a lake, set the id of the cell to the coordinates and set the cursor to pointer on a mouseover event
+                if (td.id !== "lake") {
+                    // Set the id of a cell to its coordinates
+                    td.setAttribute('id', `${i}, ${j}`)
+                    td.onmouseover = function () {
+                        td.style.cursor = "pointer"
+                    }
+                }
+
+                //Assign empty value to the cell
+                td.setAttribute('value', "")
+                // Create an empty text node for the cell
+                let emptyTextNode = document.createTextNode("")
+                emptyTextNode.nodeName = "text"
+
+                // Add text node to the cell
+                td.appendChild(emptyTextNode)
+                // Adjust the size of the cell
+                td.style.width = "100px"
+                td.style.height = "100px"
+
+                // Defines the onclick event for a cell
+                td.onclick = function () {
+                    if (td.id !== "lake") {
+                        //When selecting the piece, pieceSelected, to move,
+                        // colour the cell of it lightblue.
+                        // And if a cell is selected where the selected piece can go to, colour it lightgreen
+                        if (phase === "play") {
+                            currentSelectedTableCell = td.id
+                            currentSelectedCell.x = i
+                            currentSelectedCell.y = j
+                            if (Object.keys(pieceSelected).length !== 0 && board[i][j].player !== currentPlayer) {
+                                if (isValidMove(pieceSelected.x, pieceSelected.y)) {
+                                    //set the old cell to move to white
+                                    if (Object.keys(moveToCell).length !== 0) {
+                                        //and remove the move button for moving to old cell
+                                        board[moveToCell.x][moveToCell.y].cell.style.background = "white"
+                                    }
+                                    //change the cell to move to and make it lightgreen
+                                    moveToCell = {x: i, y: j}
+                                    board[i][j].cell.style.background = "lightgreen"
+                                    if (document.getElementById("move-button") === null){
+                                        moveButton()
+                                    }
+
+                                }
+                            } else {
+                                //i will later be currentSelectedCell.x
+                                //j will later be currentSelectedCell.y
+                                if (board[i][j].player === currentPlayer) {
+                                    //set the old cell of the piece selected to move to white
+                                    if (Object.keys(pieceSelected).length !== 0) {
+                                        board[pieceSelected.x][pieceSelected.y].cell.style.background = "white"
+                                    }
+                                    //set the old cell to move to white, if the cell is not from the other player
+                                    if (Object.keys(moveToCell).length !== 0 && board[moveToCell.x][moveToCell.y].player === null) {
+                                        board[moveToCell.x][moveToCell.y].cell.style.background = "white"
+                                    }
+                                    //change the piece selected cell and make it lightblue
+                                    pieceSelected = {x: i, y: j}
+                                    board[i][j].cell.style.background = "lightblue"
+                                    //remove the move button of the last pieceSelected
+                                    if (document.getElementById("move-button") !== null) {
+                                        document.getElementById("move-button").remove()
+                                    }
+                                }
+                            }
+                        }
+
+                        if (phase === "setup") {
+                            //sets old selected cell back to white
+                            if (currentSelectedTableCell !== "") {
+                                document.getElementById(currentSelectedTableCell).style.background = "white"
+                            }
+                            td.style.background = "lightblue"
+                            currentSelectedTableCell = td.id
+                            currentSelectedCell.x = i
+                            currentSelectedCell.y = j
+                        }
+                    }
+                }
+
+                // Initialize the cell with no player and add the table data to the cell
+                board[i][j].player = null
+                board[i][j].cell = td
+            }
+        }
+    }
+
+    // refreshDropdown refreshes the dropdown menu
+    function refreshDropdown() {
+        document.getElementById("dropdown-form-div").removeChild(document.getElementById("dropdown-form"))
+        document.getElementById("dropdown-form-div").appendChild(newForm())
+    }
+
+    // allPiecesPlaced checks if all the pieces of a player are placed
+    function allPiecesPlaced() {
+        for (const piece of pieces) {
+            if (piece.placed !== piece.amount) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Creates the submit button
+    function createSubmitButton() {
+        // Create a button element
+        let submit = document.createElement("button")
+        submit.setAttribute("id", "submit-button")
+        submit.appendChild(document.createTextNode("Submit"))
+
+        // Define the onclick event for the button
+        submit.onclick = function () {
+            // Get the dropdown from HTML
+            let dropdown = document.getElementById("dropdown")
+            // Get the selected item from the dropdown list
+            let selectedPiece;
+            for (let piece of pieces) {
+                if (dropdown.options[dropdown.selectedIndex].value === piece.name) {
+                    selectedPiece = piece
+                }
+                if (document.getElementById(currentSelectedTableCell).getAttribute("value") === piece.name) {
+                    piece.placed--
+                }
+            }
+            selectedPiece.placed++
+
+            document.getElementById(currentSelectedTableCell).setAttribute("value", selectedPiece.name)
+            document.getElementById(currentSelectedTableCell).lastChild.nodeValue = selectedPiece.name
+            board[currentSelectedCell.x][currentSelectedCell.y].player = currentPlayer
+
+            refreshDropdown()
+
+            if (allPiecesPlaced() === true) {
+                playersHavePlaced += 1 //for knowing when to start the game
+                if (playersHavePlaced === 2) {
+                    phase = "play"
+                }
+                doneButton()
+            }
+
+        }
+        document.getElementById("buttons-div").appendChild(submit)
+    }
+
+    // createDeleteButton creates a delete button
+    function createDeleteButton() {
+        let del = document.createElement("button")
+        del.setAttribute("id", "delete-button")
+        del.appendChild(document.createTextNode("Delete"))
+
+        del.onclick = function () {
+            for (let piece of pieces) {
+                if (document.getElementById(currentSelectedTableCell).getAttribute("value") === piece.name) {
+                    // If there is a done-button, remove it because if a piece is removed then definitely not all pieces are placed,
+                    // except if the button is clicked on an empty selected cell
+                    if (allPiecesPlaced()) {
+                        if (phase === "play") {
+                            phase = "setup"
+                        }
+                        playersHavePlaced -= 1
+                        if (document.getElementById("done-button") !== null) {
+                            document.getElementById("done-button").remove()
+                        }
+                    }
+                    piece.placed--
+                }
+            }
+            // Remove the piece from field
+            document.getElementById(currentSelectedTableCell).setAttribute("value", "")
+            document.getElementById(currentSelectedTableCell).lastChild.nodeValue = ""
+            board[currentSelectedCell.x][currentSelectedCell.y].player = null
+
+            // Renew the dropdown menu
+            refreshDropdown()
+        }
+        document.getElementById("buttons-div").appendChild(del)
+    }
+
+    // removeBoard removes the board, for example to show the proceed button
+    function removeBoard() {
+        if (document.getElementById("board-div").lastChild != null) {
+            document.getElementById("board-div").lastChild.remove()
+        }
+
+        currentSelectedTableCell = ""
+    }
+
+    // displayMessage displays info which pieces were involved in a fight
+    function displayMessage(msg) {
+        let text = document.createTextNode(msg)
+        document.getElementById("board-div").appendChild(text)
+    }
+
+    // proceedButton creates the proceed button
+    function proceedButton() {
+        removeButtons();
+        let proceed = document.createElement("button")
+        proceed.setAttribute("id", "proceed-button")
+        proceed.appendChild(document.createTextNode("Proceed"))
+        document.getElementById("board").remove()
+        let instructions = document.getElementById("instructions")
+        document.getElementById("instructions").remove()
+        document.getElementById("board-div").appendChild(proceed)
+        proceed.onclick = function () {
+            // Make all the cells except for the lakes white, otherwise the table is messed up with multiple blue fields for the selection
+            for (let i = 0; i < 8; i++) {
+                for (let j = 0; j < 8; j++) {
+                    let makeWhite = true
+                    for (let k = 0; k < 4; k++) {
+                        if (i === UNSELECTABLE_FIELDS[k].x && j === UNSELECTABLE_FIELDS[k].y) {
+                            makeWhite = false
+                            break;
+                        }
+                    }
+                    if (makeWhite) {
+                        board[i][j].cell.style.background = "white"
+                    }
+                }
+            }
+
+            //switch the currentPlayer; switch turn
+            if (currentPlayer === PLAYER_1) {
+                currentPlayer = PLAYER_2
+            } else {
+                currentPlayer = PLAYER_1
+            }
+            //Make the old selected piece empty, because the other player needs to select one
+            //Make the old cell to move to empty, because the other player needs to select one
+            pieceSelected = {}
+            moveToCell = {}
+            document.getElementById("instructions-div").appendChild(instructions)
+            play()
+        }
+    }
+
+    // doneButton creates a doneButton when all pieces are placed on the board
+    function doneButton() {
+        //Appears when a player is done places their pieces
+        let done = document.createElement("button")
+        done.setAttribute("id", "done-button")
+        done.appendChild(document.createTextNode("Done"))
+
+        done.onclick = function () {
+
+
+            //begin playing
+            if (phase === "play") {
+                proceedButton()
+            } else {
+
+                //switch the currentPlayer; switch turn
+                if (currentPlayer === PLAYER_1) {
+                    currentPlayer = PLAYER_2
+                } else {
+                    currentPlayer = PLAYER_1
+                }
+
+                if (phase === "setup" && playersHavePlaced >= 2) {
+                    //When both players have placed their pieces, they can start playing
+                    phase = "play"
+                } else {
+                    //When one player has placed his/her pieces, the other player has to place his/her pieces
+                    startGame(currentPlayer)
+                }
+            }
+        }
+        document.getElementById("form-div").appendChild(done)
+    }
+
+    function checkWin(){
+        //Player wins if other player has no moving pieces left
+        if (noMovingPieces(PLAYER_1)) {
+            win(PLAYER_2)
+        } else if (noMovingPieces(PLAYER_2)) {
+            win(PLAYER_1)
+        } else {
+            proceedButton()
+        }
+    }
+
+    // moveButton creates a button for the players to confirm that a move has to be performed
+    function moveButton() {
+        let done = document.createElement("button")
+        done.setAttribute("id", "move-button")
+        done.appendChild(document.createTextNode("Move"))
+
+        done.onclick = function () {
+            move()
+        }
+        document.getElementById("form-div").appendChild(done)
+    }
+
+    // createSelectableRow creates a normal row for the board
+    function createNonSelectableRow() {
+        const tr = document.createElement("tr")
+        for (let j = 0; j < 8; j++) {
+            const td = document.createElement("td")
+            td.style.width = "100px"
+            td.style.height = "100px";
+            td.style.background = "grey"
+            tr.appendChild(td)
+        }
+        return tr
+    }
+
+    // showBoard makes the board visible, it works with rows that are not selectable and rows that are selectable.
+    function showBoard(startSelectable, endSelectable) {
+        removeBoard()
+        if (document.getElementById("proceed-button") !== null) {
+            document.getElementById("board-div").lastChild.remove()
+        }
+        if (document.getElementById("done-button") !== null) {
+            document.getElementById("form-div").lastChild.remove()
+        }
+        if (document.getElementById("board-div").lastChild !== null) {
+            document.getElementById("board-div").lastChild.remove()
+        }
+
+        // Create a table element
+        let tbl = document.createElement('table')
+        tbl.setAttribute("id", "board")
+        // Adjust the style of the border of the table
+        tbl.style.border = '1px solid black'
+
+        // Create non-selectable rows at the top of the board
+        for (let i = 0; i < startSelectable; i++) {
+            tbl.appendChild(createNonSelectableRow())
+        }
+
+        // Create rows where the players are recognizable by a color for the opponent (red or blue) and for the current player the names of his pieces
+        for (let i = startSelectable; i <= endSelectable; i++) {
+            const tr = document.createElement("tr")
+            for (let j = 0; j < 8; j++) {
+                let td = board[i][j].cell
+                td.lastChild.nodeValue = td.getAttribute("value")
+                if(board[i][j].player !== currentPlayer && board[i][j].player !== null) {
+                    if (board[i][j].player === PLAYER_1) {
+                        td.style.background = "#D01600FF"
+                    } else {
+                        td.style.background = "#0037c4"
+                    }
+                    td.lastChild.nodeValue = ""
+                }
+                tr.appendChild(td)
+            }
+            tbl.appendChild(tr)
+        }
+        // Create non-selectable rows at the bottom of the board
+        for (let i = endSelectable + 1; i < 8; i++) {
+            tbl.appendChild(createNonSelectableRow())
+        }
+        // Add the table to the board-div HTML element
+        document.getElementById("board-div").appendChild(tbl)
+    }
+
+    // startGame handles the order for the setup
+    function startGame(player) {
+        // Make the placed attribute of each piece 0, so that we can count again for the second player and create a proper dropdown menu
+        for (let piece of pieces) {
+            piece.placed = 0
+        }
+
+        refreshDropdown()
+        if (player === PLAYER_1) {
+            showBoard(0, 2)
+        } else {
+            showBoard(5, 7)
+        }
+    }
+
+    // removeButton creates a button to remove a piece in the setup phase
+    function removeButtons() {
+        if (document.getElementById("delete-button") !== null) {
+            document.getElementById("buttons-div").removeChild(document.getElementById("delete-button"))
+        }
+        if (document.getElementById("submit-button") !== null) {
+            document.getElementById("buttons-div").removeChild(document.getElementById("submit-button"))
+        }
+        if (document.getElementById("done-button") !== null) {
+            document.getElementById("done-button").remove()
+        }
+        if (document.getElementById("dropdown-form-div").lastChild !== null) {
+            document.getElementById("dropdown-form-div").removeChild(document.getElementById("dropdown-form-div").lastChild)
+        }
+        if (document.getElementById("move-button") !== null) {
+            document.getElementById("move-button").remove()
+        }
+    }
+
+    // play shows the board, it is used as a clear indicator in the code that another turn or phase in the game is starting
+    function play() {
+        showBoard(0, 7);
+    }
+
+    // getRank returns the rank of a player
+    function getRank(pieceName) {
+        let piece = pieces.find(piece => piece.name === pieceName);
+        return piece ? piece.rank : null;
+    }
+
+    // fight handles the game logic for an attacking piece and a defending piece, considering all ranks and options
+    function fight() {
+        // Returns 1 if the attacking player wins, 2 if the attacking player loses and 3 if it is a draw
+        //Both cells of pieceSelected and moveToCell need to contain pieces
+        let pieceAttackingPlayer = document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).getAttribute("value");
+        let pieceDefendingPlayer = document.getElementById(board[moveToCell.x][moveToCell.y].cell.id).getAttribute("value");
+
+        // Bomb and Miner
+        if (pieceAttackingPlayer === "Miner" && pieceDefendingPlayer === "Bomb") {
+            displayMessage("Attacking player won, the attacking piece was: " + pieceAttackingPlayer + ", the defending piece was: " + pieceDefendingPlayer)
+            return 1
+        }
+
+        // Spy and Marshal
+        if (pieceAttackingPlayer === "Spy" && pieceDefendingPlayer === "Marshal") {
+            displayMessage("Attacking player won, the attacking piece was: " + pieceAttackingPlayer + ", the defending piece was: " + pieceDefendingPlayer)
+            return 1
+        }
+
+        // Rest of the pieces
+        let rankAttackingPiece = getRank(pieceAttackingPlayer)
+        let rankDefendingPlayer = getRank(pieceDefendingPlayer)
+
+        // Draw
+        if (rankAttackingPiece === rankDefendingPlayer) {
+            displayMessage("Draw, both pieces were: " + pieceAttackingPlayer)
+            return 3
+        }
+
+        // Attacking player wins
+        if (rankAttackingPiece > rankDefendingPlayer) {
+            displayMessage("Attacking player won, the attacking piece was: " + pieceAttackingPlayer + ", the defending piece was: " + pieceDefendingPlayer)
+            return 1
+        }
+
+        // Else the attacking player loses
+        displayMessage("Attacking player lost, the attacking piece was: " + pieceAttackingPlayer + ", the defending piece was: " + pieceDefendingPlayer)
+        return 2
+    }
+
+    // step updates the data in the board
+    function step() {
+        //Change the board such that a piece has made a step
+        //The value of the moveToCell will be the value of the pieceSelected
+        let pieceSelectedVal = document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).getAttribute("value")
+        document.getElementById(board[moveToCell.x][moveToCell.y].cell.id).setAttribute("value", pieceSelectedVal)
+        document.getElementById(board[moveToCell.x][moveToCell.y].cell.id).lastChild.nodeValue = pieceSelectedVal
+        board[moveToCell.x][moveToCell.y].player = currentPlayer
+
+        //pieceSelected will no longer contain a piece
+        board[pieceSelected.x][pieceSelected.y].player = null
+        document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).setAttribute("value", "")
+        document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).lastChild.nodeValue = ""
+    }
+
+    // removeAll removes the children of board-div and all buttons that exist, to make place for the win text
+    function removeAll() {
+        if (document.getElementById("board-div").lastChild !== null) {
+            document.getElementById("board-div").removeChild(document.getElementById("board-div").lastChild)
+        }
+        if (document.getElementById("board-div").lastChild !== null) {
+            document.getElementById("board-div").removeChild(document.getElementById("board-div").lastChild)
+        }
+        removeButtons()
+    }
+
+    // win shows that a player has won
+    function win(Player) {
+        removeAll()
+        let winText = document.createElement("h1")
+        winText.setAttribute("id", "winText")
+        winText.appendChild(document.createTextNode(`Player ${Player} wins!`))
+        document.getElementById("board-div").appendChild(winText);
+        sendWin()
+        // END OF GAME
+    }
+
+    // noMovingPieces checks if there are no moving pieces left for a player, meaning that that player loses
+    function noMovingPieces(player) {
+        //returns true if the currentPlayer has no pieces to move
+        let pieces = []
+        for (let i = 0; i < 8; i++) {
+            for (let j = 0; j < 8; j++) {
+                if (board[i][j].player === player) {
+                    pieces.push(board[i][j].cell.getAttribute("value"))
+                }
+            }
+        }
+        for(const piece of pieces) {
+            if (piece !== "Flag" && piece !== "Bomb") {
+                return false
+            }
+        }
+        return true
+    }
+
+    // move performs a move, can also be an attack
+    function move() {
+        //pieceSelected is where from
+        //moveToCell is where to
+        //call the isValidMove() function before calling this function
+
+        //not attacking, the cell to move too doesn't contain a piece
+        if (board[moveToCell.x][moveToCell.y].player === null) {
+            step()
+            // Send to Wemos: move pieceSelected to moveToCell
+            sendMove(pieceSelected.x, pieceSelected.y, moveToCell.x, moveToCell.y)
+                .then((response) => {
+                    console.log(response)
+                    proceedButton()
+                })
+        } else {
+            //Attack
+            let toCell = document.getElementById(board[moveToCell.x][moveToCell.y].cell.id).getAttribute("value");
+            //Player wins if he/she has found the flag
+            if (toCell === "Flag") {
+                win(currentPlayer)
+            } else {
+                //save the following variables, bc clicking the proceed button empties the global variables
+                //which causes the sendMove to get undefined values
+                let pieceSelectedX = pieceSelected.x
+                let pieceSelectedY = pieceSelected.y
+                let moveToCellX = moveToCell.x
+                let moveToCellY = moveToCell.y
+                let attack = fight()
+                if (attack === 1) {
+                    //Attacker wins
+                    step()
+
+                    // Send to Wemos: Remove piece of moveToCell, then move pieceSelected to that cell
+                    sendRemove(moveToCellX, moveToCellY)
+                        .then((response) => {
+                            console.log(response.status);
+                            sendMove(pieceSelectedX, pieceSelectedY, moveToCellX, moveToCellY)
+                                .then((response) => {
+                                    console.log(response)
+                                    checkWin()
+                                })
+                        });
+                } else if (attack === 2) {
+                    //Defender wins
+                    board[pieceSelected.x][pieceSelected.y].player = null
+                    document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).setAttribute("value", "");
+                    document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).lastChild.nodeValue = ""
+
+                    // Send to Wemos: Remove piece of pieceSelected
+                    sendRemove(pieceSelected.x, pieceSelected.y)
+                        .then((response) => {
+                            console.log(response)
+                            checkWin()
+                        })
+                } else {
+                    //Draw: both lose
+                    board[pieceSelected.x][pieceSelected.y].player = null
+                    document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).setAttribute("value", "");
+                    document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id).lastChild.nodeValue = ""
+
+                    board[moveToCell.x][moveToCell.y].player = null
+                    document.getElementById(board[moveToCell.x][moveToCell.y].cell.id).setAttribute("value", "");
+                    document.getElementById(board[moveToCell.x][moveToCell.y].cell.id).lastChild.nodeValue = ""
+
+                    // Send to Wemos: Remove piece of pieceSelected, then remove piece of moveToCell
+                    sendRemove(pieceSelectedX, pieceSelectedY)
+                        .then((response) => {
+                            console.log(response.status);
+                            sendRemove(moveToCellX, moveToCellY)
+                                .then((response) => console.log(response))
+                            checkWin()
+                        })
+                }
+            }
+        }
+    }
+
+    // isValidMove checks if a move is valid
+    function isValidMove() {
+        //returns if moving the pieceSelected to the currentSelectedCell is follows the rules of Stratego
+        //obtain what kind of piece the pieceSelected is
+
+        let piece_td = document.getElementById(board[pieceSelected.x][pieceSelected.y].cell.id);
+        let piece = piece_td.getAttribute("value");
+
+        //check if diagonal movement
+        if (pieceSelected.x !== currentSelectedCell.x && pieceSelected.y !== currentSelectedCell.y) {
+            return false;
+        }
+
+        if (piece === "Flag" || piece === "Bomb") {
+            return false;
+        }
+
+        let amountOfSteps = 1;
+
+        if (piece === "Explorer") {
+            amountOfSteps = 9
+        }
+
+        if (Math.abs(pieceSelected.x - currentSelectedCell.x) > amountOfSteps || Math.abs(pieceSelected.y - currentSelectedCell.y) > amountOfSteps) {
+            return false
+        }
+
+        //no jumping over a piece
+        if (pieceSelected.x < currentSelectedCell.x && PieceInWay("down", pieceSelected.x, pieceSelected.y)) {
+                return false;
+        }
+        if (pieceSelected.x > currentSelectedCell.x && PieceInWay("up", pieceSelected.x, pieceSelected.y)) {
+                return false;
+        }
+        if (pieceSelected.y < currentSelectedCell.y && PieceInWay("right", pieceSelected.x, pieceSelected.y)) {
+                return false;
+        }
+        if (pieceSelected.y > currentSelectedCell.y && PieceInWay("left", pieceSelected.x, pieceSelected.y)) {
+                return false;
+        }
+
+        //not attacking yourself and return
+        return board[pieceSelected.x][pieceSelected.y].player !== board[currentSelectedCell.x][currentSelectedCell.y].player
+
+    }
+
+    // PieceInWay checks if a piece is in the way in a certain direction, mainly important for the explorer
+     function PieceInWay (direction) {
+        //returns true when there is a piece between the pieceSelected and the currentSelectedCell
+        if(direction === "down"){
+            for(let i = pieceSelected.x + 1; i < currentSelectedCell.x; i++){
+                if (board[i][pieceSelected.y].player !== null) {
+                    return true;
+                }
+            }
+        } else if(direction === "up"){
+            for(let i = pieceSelected.x - 1; i > currentSelectedCell.x; i--){
+                if (board[i][pieceSelected.y].player !== null) {
+                    return true;
+                }
+            }
+        } else if(direction === "left") {
+            for (let i = pieceSelected.y - 1; i > currentSelectedCell.y; i--) {
+                if (board[pieceSelected.x][i].player !== null) {
+                    return true;
+                }
+            }
+        } else {
+            for (let i = pieceSelected.y + 1; i < currentSelectedCell.y; i++) {
+                if (board[pieceSelected.x][i].player !== null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+     }
+
+    // Add the form, create the table and necessary buttons, than start the game
+    document.getElementById("dropdown-form-div").appendChild(newForm())
+    createTable()
+    createSubmitButton()
+    createDeleteButton()
+    startGame(PLAYER_1) //can also start with PLAYER_2
+
+</script>
+</html>
