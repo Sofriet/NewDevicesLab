@@ -2,4 +2,4 @@
 Created a robotic Stratego board
 with a simple web page and Arduino code to control it
 <br>
-together with Robert van der Maas
+with Robert van der Maas
